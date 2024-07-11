@@ -7,9 +7,15 @@ int idx_current_anim = 0;
 const int PLAYER_ANIM_NUM = 6;
 const int WINDOW_WIDTH = 1280;
 const int WINDOW_HEIGHT = 720;
+
+const int BUTTON_WIDTH = 192;
+const int BUTTON_HEIGHT = 75;
+
 //音效
 #pragma comment(lib,"Winmm.lib")
 
+bool is_game_start = false;
+bool running = true;
 
 IMAGE img_player_left[PLAYER_ANIM_NUM];
 IMAGE img_player_right[PLAYER_ANIM_NUM];
@@ -364,6 +370,88 @@ private:
 
 };
 
+class Button
+{
+public:
+	Button(RECT rect,LPCTSTR path_img_idle,LPCTSTR path_img_hovered,LPCTSTR path_img_pushed)
+	{
+		region = rect;
+
+		loadimage(&img_idle, path_img_idle);
+		loadimage(&img_hovered, path_img_hovered);
+		loadimage(&img_pushed, path_img_pushed);
+	}
+	~Button() = default;
+
+	void ProcessEvent(const ExMessage& msg)
+	{
+		switch (msg.message)
+		{
+		case WM_MOUSEMOVE:
+			if (status == Status::Idle && CheckCursorHit(msg.x, msg.y))
+				status = Status::Hovered;
+			else if (status == Status::Hovered && !CheckCursorHit(msg.x, msg.y))
+				status = Status::Idle;
+			break;
+		case WM_LBUTTONDOWN:
+			if (CheckCursorHit(msg.x, msg.y))
+			{
+				status = Status::Pushed;
+			}
+			break;
+		case WM_LBUTTONUP:
+			if (status == Status::Pushed)
+			{
+				OnClick();
+			}
+			break;
+		default:
+			break;
+		}
+	}
+
+	void Draw()
+	{
+		switch (status)
+		{
+		case Status::Idle:
+			putimage(region.left, region.top, &img_idle);
+			break;
+		case Status::Hovered:
+			putimage(region.left, region.top, &img_hovered);
+			break;
+		case Status::Pushed:
+			putimage(region.left, region.top, &img_pushed);
+			break;
+		}
+	}
+
+protected:
+	virtual void OnClick() = 0;
+
+
+private:
+	enum class Status
+	{
+		Idle = 0,
+		Hovered,
+		Pushed
+	};
+
+private:
+	RECT region;
+	IMAGE img_idle;
+	IMAGE img_hovered;
+	IMAGE img_pushed;
+	Status status = Status::Idle;
+
+private:
+	//检测有没有出现在区域内
+	bool CheckCursorHit(int x,int y)
+	{
+		return x >= region.left && x <= region.right && y >= region.top && y <= region.bottom;
+	}
+};
 //生成敌人
 void TryGenerateEnmy(std::vector<Enemy*>& enemy_list)
 {
@@ -397,98 +485,155 @@ void DrawaPlayeScore(int score) {
 	outtextxy(10, 10, text);
 }
 
+//开始按钮
+class StartButton : public Button
+{
+public:
+	StartButton(RECT rect, LPCTSTR path_img_idle, LPCTSTR path_img_hovered, LPCTSTR path_img_pushed)
+		:Button(rect, path_img_idle, path_img_hovered, path_img_pushed){}
+	~StartButton() = default;
+
+protected:
+	void OnClick()
+	{
+		is_game_start = true;
+		mciSendString(_T("play bgm repeat from 0"), NULL, 0, NULL);//循环播放
+	}
+};
+//结束按钮
+class QuitButton : public Button
+{
+public:
+	QuitButton(RECT rect, LPCTSTR path_img_idle, LPCTSTR path_img_hovered, LPCTSTR path_img_pushed)
+		:Button(rect, path_img_idle, path_img_hovered, path_img_pushed) {}
+	~QuitButton() = default;
+
+protected:
+	void OnClick()
+	{
+		running = false;
+	}
+};
+
 int main() {
 	initgraph(1280, 720);//窗口
 
 	//bgm
 	mciSendString(_T("open mus/bgm.mp3 alias bgm"), NULL, 0, NULL);
 	mciSendString(_T("open mus/hit.wav alias hit"), NULL, 0, NULL);
-	mciSendString(_T("play bgm repeat from 0"), NULL, 0, NULL);//循环播放
-
-
-	bool running = true;
-
+	
+	int score = 0;
 	Player p1;
 	ExMessage msg;
 	IMAGE img_background;
+	IMAGE img_menu;
 	std::vector<Enemy*> enemy_list;
 	std::vector<Bullet> bullet_list(3);
-	int score = 0;
 
+	RECT start_btn, quit_btn;
+
+	start_btn.left = (WINDOW_WIDTH - BUTTON_WIDTH) / 2;
+	start_btn.right = start_btn.left + BUTTON_WIDTH;
+	start_btn.top = 430;
+	start_btn.bottom = start_btn.top + BUTTON_HEIGHT;
+
+	quit_btn.left = (WINDOW_WIDTH - BUTTON_WIDTH) / 2;
+	quit_btn.right = quit_btn.left + BUTTON_WIDTH;
+	quit_btn.top = 550;
+	quit_btn.bottom = quit_btn.top + BUTTON_HEIGHT;
+
+	StartButton btn_start = StartButton(start_btn,
+		_T("img/ui_start_idle.png"),_T("img/ui_start_hovered.png"), _T("img/ui_start_pushed.png"));
+	QuitButton btn_quit = QuitButton(quit_btn,
+		_T("img/ui_quit_idle.png"), _T("img/ui_quit_hovered.png"), _T("img/ui_quit_pushed.png"));
+
+	loadimage(&img_menu,_T("img/menu.png"));
 	loadimage(&img_background, _T("img/background.png"));//加载背景和阴影
 	
-	
-
 	LoadAnimation();
 	BeginBatchDraw();
 	
-
 	while (running)
 	{
 		DWORD start_time = GetTickCount();
 		
 		while (peekmessage(&msg))
 		{
-			p1.ProcessEvent(msg);
+			if(is_game_start){
+				p1.ProcessEvent(msg);
+			}
+			else {
+				btn_start.ProcessEvent(msg);
+				btn_quit.ProcessEvent(msg);
+			}
 		}
 		p1.move();
+		if (is_game_start) {
+			TryGenerateEnmy(enemy_list);
+			for (Enemy* enemy : enemy_list)
+				enemy->Move(p1);
 
-		TryGenerateEnmy(enemy_list);
-		for (Enemy* enemy : enemy_list)
-			enemy->Move(p1);
-
-		//敌人与玩家碰撞
-		for (Enemy* enemy : enemy_list)
-		{
-			if (enemy->CheckPlayerCollision(p1))
+			//敌人与玩家碰撞
+			for (Enemy* enemy : enemy_list)
 			{
-				static TCHAR text[128];
-				_stprintf_s(text, _T("玩家最终得分为：%d"), score);
-				MessageBox(GetHWnd(), _T("扣1观看战败CG"), _T("游戏结束"), MB_OK);
-				running = false;
-				break;
-			}
-		}
-		//敌人与子弹进行碰撞
-		for (Enemy* enemy : enemy_list) {
-			for (const Bullet& bullet : bullet_list)
-			{
-				if (enemy->CheckBulletCollision(bullet))
+				if (enemy->CheckPlayerCollision(p1))
 				{
-					enemy->Hurt();
+					static TCHAR text[128];
+					_stprintf_s(text, _T("玩家最终得分为：%d"), score);
+					MessageBox(GetHWnd(), _T("扣1观看战败CG"), _T("游戏结束"), MB_OK);
+					running = false;
+					break;
 				}
 			}
-		}
-		//移除生命值为0的敌人
-		for (size_t i = 0; i < enemy_list.size(); i++)
-		{
-			Enemy* enemy = enemy_list[i];
-			if (!enemy->CheckAlive())
-			{
-
-				mciSendString(_T("play hit from 0"), NULL, 0, NULL);
-				std::swap(enemy_list[i], enemy_list.back());
-				enemy_list.pop_back();//swap 和 pop 从vector中 删除元素
-				delete enemy;//检测到要删除的元素时，先与最后一个元素进行交换，再popback，最后delete
-				score++;
+			//敌人与子弹进行碰撞
+			for (Enemy* enemy : enemy_list) {
+				for (const Bullet& bullet : bullet_list)
+				{
+					if (enemy->CheckBulletCollision(bullet))
+					{
+						enemy->Hurt();
+					}
+				}
 			}
+			//移除生命值为0的敌人
+			for (size_t i = 0; i < enemy_list.size(); i++)
+			{
+				Enemy* enemy = enemy_list[i];
+				if (!enemy->CheckAlive())
+				{
+
+					mciSendString(_T("play hit from 0"), NULL, 0, NULL);
+					std::swap(enemy_list[i], enemy_list.back());
+					enemy_list.pop_back();//swap 和 pop 从vector中 删除元素
+					delete enemy;//检测到要删除的元素时，先与最后一个元素进行交换，再popback，最后delete
+					score++;
+				}
+			}
+
+			UpdatteBullet(bullet_list, p1);
 		}
+			cleardevice();
 
-		UpdatteBullet(bullet_list, p1);
+			if (is_game_start)
+			{
+				putimage(0, 0, &img_background);
 
-		cleardevice();
-
-		putimage(0, 0, &img_background);
+				p1.Draw(1000 / 144);
+				for (Enemy* enemy : enemy_list)
+					enemy->Draw(1000 / 144);
+				for (const Bullet& bullet : bullet_list)
+					bullet.Draw();
+				DrawaPlayeScore(score);
+			}
+			else
+			{
+				putimage(0 , 0 , &img_menu);
+				btn_start.Draw();
+				btn_quit.Draw();
+			}
+			FlushBatchDraw();
 		
-		p1.Draw(1000 / 144);
-		for (Enemy* enemy : enemy_list)
-			enemy->Draw(1000 / 144);
-		for (const Bullet& bullet : bullet_list)
-			bullet.Draw();
-		DrawaPlayeScore(score);
-
-		FlushBatchDraw();
-
+		
 		DWORD end_time = GetTickCount();//获取运行时间 计算什么时候休眠
 		DWORD delta_time = end_time - start_time;
 		
